@@ -5,6 +5,8 @@ services:
     #   - certs:/usr/share/elasticsearch/config/certs
     container_name: setup
     user: "0"
+    networks:
+      - traefik_network
     command: >
       bash -c '
         if [ x${ELASTIC_PASSWORD} == x ]; then
@@ -19,9 +21,9 @@ services:
         # find . -type d -exec chmod 750 \{\} \;;
         # find . -type f -exec chmod 640 \{\} \;;
         echo "Waiting for Elasticsearch availability";
-        until curl -s https://es.codecrumbs.cloud | grep -q "missing authentication credentials"; do sleep 1; done;
+        until curl -s http://elasticsearch:9200 | grep -q "missing authentication credentials"; do sleep 1; done;
         echo "Setting kibana_system password";
-        until curl -s -X POST -u "elastic:${ELASTIC_PASSWORD}" -H "Content-Type: application/json" https://es.codecrumbs.cloud/_security/user/kibana_system/_password -d "{\"password\":\"${KIBANA_PASSWORD}\"}" | grep -q "^{}"; do sleep 10; done;
+        until curl -s -X POST -u "elastic:${ELASTIC_PASSWORD}" -H "Content-Type: application/json" http://elasticsearch:9200/_security/user/kibana_system/_password -d "{\"password\":\"${KIBANA_PASSWORD}\"}" | grep -q "^{}"; do sleep 10; done;
         echo "All done!";
       '
 
@@ -53,107 +55,109 @@ services:
       - traefik_network
     labels:
       - "traefik.enable=true"
+      - "traefik.protocol=http"  
       - "traefik.http.routers.elasticsearch.rule=Host(`es.codecrumbs.cloud`)"
       - "traefik.http.routers.elasticsearch.entrypoints=websecure"
+      - "traefik.http.routers.elasticsearch.tls=true"
       - "traefik.http.routers.elasticsearch.tls.certresolver=letsencrypt"
       - "traefik.http.services.elasticsearch.loadbalancer.server.port=9200"
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "curl -s  https://es.codecrumbs.cloud | grep -q 'missing authentication credentials'",
-        ]
-      interval: 10s
-      timeout: 10s
-      retries: 120
+    # healthcheck:
+    #   test: ["CMD", "curl", "-f", "http://localhost:9200"]
+    #   interval: 1m  # Check every minute
+    #   timeout: 30s   # Allow 30 seconds for the check to complete
+    #   retries: 3     # Retry 3 times before marking as unhealthy
     ports:
       - "9200:9200"
 
 
-  # kibana:
-  #   image: docker.elastic.co/kibana/kibana:${STACK_VERSION}
-  #   container_name: kibana
-  #   # depends_on:
-  #   #   - elasticsearch
-  #   depends_on:
-  #     elasticsearch:
-  #       condition: service_healthy
-  #   environment:
-  #     - ELASTICSEARCH_HOSTS=https://es.codecrumbs.cloud
-  #     - ELASTICSEARCH_USERNAME=kibana_system
-  #     - ELASTICSEARCH_PASSWORD=${KIBANA_PASSWORD}
-  #     - SERVER_PUBLICBASEURL=https://kibana.codecrumbs.cloud
-  #     - SERVER_NAME=kibana
-  #     - XPACK_SECURITY_ENCRYPTIONKEY=${ENCRYPTION_KEY}
-  #     - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=${ENCRYPTION_KEY}
-  #     - XPACK_REPORTING_ENCRYPTIONKEY=${ENCRYPTION_KEY}
-  #   networks:
-  #     - traefik_network
-  #   labels:
-  #     - "traefik.enable=true"
-  #     - "traefik.http.routers.kibana.rule=Host(`kibana.codecrumbs.cloud`)"
-  #     - "traefik.http.routers.kibana.entrypoints=websecure"
-  #     - "traefik.http.routers.kibana.tls.certresolver=letsencrypt"
-  #     - "traefik.http.services.kibana.loadbalancer.server.port=5601"
+  kibana:
+    image: docker.elastic.co/kibana/kibana:${STACK_VERSION}
+    container_name: kibana
+    depends_on:
+      - elasticsearch
+    # depends_on:
+    #   elasticsearch:
+    #     condition: service_healthy
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - ELASTICSEARCH_USERNAME=kibana_system
+      - ELASTICSEARCH_PASSWORD=${KIBANA_PASSWORD}
+      - SERVER_PUBLICBASEURL=https://kibana.codecrumbs.cloud
+      - SERVER_NAME=kibana
+      - XPACK_SECURITY_ENCRYPTIONKEY=${ENCRYPTION_KEY}
+      - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=${ENCRYPTION_KEY}
+      - XPACK_REPORTING_ENCRYPTIONKEY=${ENCRYPTION_KEY}
+    networks:
+      - traefik_network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.kibana.rule=Host(`kibana.codecrumbs.cloud`)"
+      - "traefik.http.routers.kibana.entrypoints=websecure"
+      - "traefik.http.routers.kibana.tls.certresolver=letsencrypt"
+      - "traefik.http.services.kibana.loadbalancer.server.port=5601"
 
-  #   healthcheck:
-  #     test:
-  #       [
-  #         "CMD-SHELL",
-  #         "curl -I -s  https://kibana.codecrumbs.cloud | grep -q 'HTTP/1.1 302 Found'",
-  #       ]
-  #     interval: 10s
-  #     timeout: 10s
-  #     retries: 120
-
-
+    # healthcheck:
+    #   test:
+    #     [
+    #       "CMD-SHELL",
+    #       "curl -I -s  http://localhost:5601 | grep -q 'HTTP/1.1 302 Found'",
+    #     ]
+    #   interval: 10s
+    #   timeout: 10s
+    #   retries: 120
 
 
-  # fleet-server:
-  #   depends_on:
-  #     kibana:
-  #       condition: service_healthy
-  #     elasticsearch:
-  #       condition: service_healthy
-  #   image: docker.elastic.co/beats/elastic-agent:${STACK_VERSION}
-  #   labels:
-  #     - "traefik.enable=true"
-  #     - "traefik.http.routers.elasticsearch.rule=Host(`fleet.codecrumbs.cloud`)"
-  #     - "traefik.http.routers.elasticsearch.entrypoints=websecure"
-  #     - "traefik.http.routers.elasticsearch.tls.certresolver=letsencrypt"
-  #     - "traefik.http.services.elasticsearch.loadbalancer.server.port=8220"
-  #   volumes:
-  #     # - certs:/certs
-  #     - fleetserverdata:/usr/share/elastic-agent
-  #     - "/var/lib/docker/containers:/var/lib/docker/containers:ro"
-  #     - "/var/run/docker.sock:/var/run/docker.sock:ro"
-  #     - "/sys/fs/cgroup:/hostfs/sys/fs/cgroup:ro"
-  #     - "/proc:/hostfs/proc:ro"
-  #     - "/:/hostfs:ro"
-  #   ports:
-  #     - ${FLEET_PORT}:8220
-  #     - ${APMSERVER_PORT}:8200
-  #   user: root
-  #   environment:
-  #     # - SSL_CERTIFICATE_AUTHORITIES=/certs/ca/ca.crt
-  #     # - CERTIFICATE_AUTHORITIES=/certs/ca/ca.crt
-  #     # - FLEET_CA=/certs/ca/ca.crt
-  #     - FLEET_ENROLL=1
-  #     # - FLEET_INSECURE=true
-  #     # - FLEET_SERVER_ELASTICSEARCH_CA=/certs/ca/ca.crt
-  #     # - FLEET_SERVER_ELASTICSEARCH_HOST=https://es01:9200
-  #     # - FLEET_SERVER_ELASTICSEARCH_INSECURE=true
-  #     - FLEET_SERVER_ENABLE=1
-  #     # - FLEET_SERVER_CERT=/certs/fleet-server/fleet-server.crt
-  #     # - FLEET_SERVER_CERT_KEY=/certs/fleet-server/fleet-server.key
-  #     - FLEET_SERVER_INSECURE_HTTP=true
-  #     - FLEET_SERVER_POLICY_ID=fleet-server-policy
-  #     - FLEET_URL=https://fleet.codecrumbs.cloud
-  #     # - KIBANA_FLEET_CA=/certs/ca/ca.crt
-  #     - KIBANA_FLEET_SETUP=1
-  #     - KIBANA_FLEET_USERNAME=elastic
-  #     - KIBANA_FLEET_PASSWORD=${ELASTIC_PASSWORD}
-  #     - KIBANA_HOST=https://kibana.codecrumbs.cloud
+
+
+  fleet-server:
+    container_name: fleet
+    depends_on:
+      - elasticsearch
+      - kibana
+    # depends_on:
+    #   kibana:
+    #     condition: service_healthy
+    #   elasticsearch:
+    #     condition: service_healthy
+    image: docker.elastic.co/beats/elastic-agent:${STACK_VERSION}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.elasticsearch.rule=Host(`fleet.codecrumbs.cloud`)"
+      - "traefik.http.routers.elasticsearch.entrypoints=websecure"
+      - "traefik.http.routers.elasticsearch.tls.certresolver=letsencrypt"
+      - "traefik.http.services.elasticsearch.loadbalancer.server.port=8220"
+    volumes:
+      # - certs:/certs
+      - fleetserverdata:/usr/share/elastic-agent
+      - "/var/lib/docker/containers:/var/lib/docker/containers:ro"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "/sys/fs/cgroup:/hostfs/sys/fs/cgroup:ro"
+      - "/proc:/hostfs/proc:ro"
+      - "/:/hostfs:ro"
+    # ports:
+    #   - ${FLEET_PORT}:8220
+    #   - ${APMSERVER_PORT}:8200
+    user: root
+    environment:
+      # - SSL_CERTIFICATE_AUTHORITIES=/certs/ca/ca.crt
+      # - CERTIFICATE_AUTHORITIES=/certs/ca/ca.crt
+      # - FLEET_CA=/certs/ca/ca.crt
+      - FLEET_ENROLL=1
+      - FLEET_INSECURE=true
+      # - FLEET_SERVER_ELASTICSEARCH_CA=/certs/ca/ca.crt
+      - FLEET_SERVER_ELASTICSEARCH_HOST=https://elasticsearch:9200
+      - FLEET_SERVER_ELASTICSEARCH_INSECURE=true
+      - FLEET_SERVER_ENABLE=1
+      # - FLEET_SERVER_CERT=/certs/fleet-server/fleet-server.crt
+      # - FLEET_SERVER_CERT_KEY=/certs/fleet-server/fleet-server.key
+      - FLEET_SERVER_INSECURE_HTTP=true
+      - FLEET_SERVER_POLICY_ID=fleet-server-policy
+      - FLEET_URL=https://fleet.codecrumbs.cloud
+      # - KIBANA_FLEET_CA=/certs/ca/ca.crt
+      - KIBANA_FLEET_SETUP=1
+      - KIBANA_FLEET_USERNAME=elastic
+      - KIBANA_FLEET_PASSWORD=${ELASTIC_PASSWORD}
+      - KIBANA_HOST=https://kibana.codecrumbs.cloud
 
 volumes:
   elastic_data:

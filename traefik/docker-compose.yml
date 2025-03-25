@@ -1,6 +1,7 @@
 services:
   traefik:
     image: traefik:v2.10
+    container_name: traefik
     command:
       - "--configFile=/etc/traefik/traefik.yml"
     ports:
@@ -15,4 +16,5 @@ services:
     restart: always
 networks:
   traefik_network:
-    external: true
+    name: traefik_network
+    external: false
