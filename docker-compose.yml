@@ -20,8 +20,42 @@ networks:
     external: false
 
 services:
+  certbot:
+    image: certbot/certbot:latest
+    container_name: certbot
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do sleep 2073600; done'"
+    volumes:
+      - ./certs:/etc/letsencrypt
+      - ./certbot-logs:/var/log/letsencrypt
+    networks:
+      - web
+    ports:
+      - "80:80"
+      - "443:443"
+
+  helper:
+    image: alpine:latest
+    container_name: certs-helper
+    depends_on:
+      - certbot
+    entrypoint: sh -c "
+      mkdir -p /elastic-certs &&
+      cp /etc/letsencrypt/live/es.codecrumbs.cloud/fullchain.pem /elastic-certs/es01.crt &&
+      cp /etc/letsencrypt/live/es.codecrumbs.cloud/privkey.pem /elastic-certs/es01.key &&
+      cp /etc/letsencrypt/live/es.codecrumbs.cloud/fullchain.pem /elastic-certs/kibana.crt &&
+      cp /etc/letsencrypt/live/es.codecrumbs.cloud/privkey.pem /elastic-certs/kibana.key &&
+      cp /etc/letsencrypt/live/es.codecrumbs.cloud/fullchain.pem /elastic-certs/fleet-server.crt &&
+      cp /etc/letsencrypt/live/es.codecrumbs.cloud/privkey.pem /elastic-certs/fleet-server.key"
+      chmod 644 ~/elastic-certs/*
+    volumes:
+      - ./certs:/etc/letsencrypt
+      - ./elastic-certs:/elastic-certs
+    networks:
+      - web
   setup:
     image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    depends_on:
+      - helper
     volumes:
       - certs:/usr/share/elasticsearch/config/certs
     user: "0"
